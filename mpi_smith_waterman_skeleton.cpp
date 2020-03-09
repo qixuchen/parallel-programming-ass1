@@ -5,14 +5,49 @@
 */
 #include <iostream>
 #include "mpi_smith_waterman.h"
+#include <math.h>
 
 /*
  *  You can add helper functions and variables as you wish.
  */
 using namespace std;
 
-int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_len, int b_len) {
+int compute_score(int **score, int i, int j, char *a, char *b) {
+	return  max(0,
+		max(score[i - 1][j - 1] + sub_mat(a[i - 1], b[j - 1]),
+			max(score[i - 1][j] - GAP,
+				score[i][j - 1] - GAP)));
+}
 
+int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_len, int b_len) {
+	int max_score = 0;
+	int local_max_score = 0;
+	char *a_str;
+	char *b_str;
+
+	if (my_rank != 0) {
+
+		MPI_Recv(&a_len, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
+		MPI_Recv(&b_len, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
+		MPI_Recv(&p, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
+		a_str = new char[a_len + 1];
+		b_str = new char[b_len + 1];
+		MPI_Recv(a_str, a_len + 1, MPI_CHAR, 0, 0, comm, MPI_STATUS_IGNORE);
+		MPI_Recv(b_str, b_len + 1, MPI_CHAR, 0, 0, comm, MPI_STATUS_IGNORE);
+	}
+	else {
+		for (int i = 1; i < p; i++) {
+			MPI_Send(&a_len, 1, MPI_INT, i, 0, comm);
+			MPI_Send(&b_len, 1, MPI_INT, i, 0, comm);
+			MPI_Send(&p, 1, MPI_INT, i, 0, comm);
+			MPI_Send(a, a_len + 1, MPI_CHAR, i, 0, comm);
+			MPI_Send(b, b_len + 1, MPI_CHAR, i, 0, comm);
+		}
+		a_str = a;
+		b_str = b;
+		
+	}
+	int total_lv = a_len + b_len;
 	int **score = new int*[a_len + 1];
 	for (int i = 0; i <= a_len; i++) {
 		score[i] = new int[b_len + 1];
@@ -20,22 +55,74 @@ int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_le
 			score[i][j] = 0;
 		}
 	}
-	// main loop
-	int max_score = 0;
-	for (int i = 1; i <= a_len; i++) {
-		for (int j = 1; j <= b_len; j++) {
-			score[i][j] = max(0,
-				max(score[i - 1][j - 1] + sub_mat(a[i - 1], b[j - 1]),
-					max(score[i - 1][j] - GAP,
-						score[i][j - 1] - GAP)));
-			max_score = max(max_score, score[i][j]);
+
+	
+	int *sendcount = new int[p];
+	int *displs = new int[p];
+
+	
+	for (int cur_lv = 2; cur_lv <= a_len + b_len; cur_lv++) {
+		
+
+		int lowerbound = max(1, cur_lv - a_len);
+		int upperbound = min(cur_lv - 1, b_len) + 1;
+		
+		int *res_buffer = new int[upperbound - lowerbound];
+		
+		//cout << "lowerbound for process 0 is " << m_lowerbound << " and upperbound is " << m_upperbound << endl;
+		for (int i = 0; i < p; i++) {
+			int p_lowerbound = lowerbound + round(i*1.0*(upperbound - lowerbound)*1.0 / p);
+			int p_upperbound = lowerbound + round((i + 1)*1.0*(upperbound - lowerbound)*1.0 / p);
+			sendcount[i] = p_upperbound - p_lowerbound;
+			displs[i] = p_lowerbound - lowerbound;
+			//cout << "lowerbound for process " << i << " is " << p_lowerbound << " and upperbound is " << p_upperbound << endl;
 		}
+		
+		int my_lowerbound = lowerbound + round(my_rank*1.0*(upperbound - lowerbound)*1.0 / p);
+		int my_upperbound = lowerbound + round((my_rank + 1)*1.0*(upperbound - lowerbound)*1.0 / p);
+		int *my_part = new int[my_upperbound - my_lowerbound];
+		for (int i = my_lowerbound; i < my_upperbound; i++) {
+			
+			score[cur_lv - i][i] = compute_score(score, cur_lv - i, i, a_str, b_str);
+			my_part[i - my_lowerbound] = score[cur_lv - i][i];
+			local_max_score = max(local_max_score, score[cur_lv - i][i]);
+			//cout << "computing for [" << cur_lv - i << "][" << i << "] and score is "<< score[cur_lv - i][i] <<" local max is " << local_max_score<<endl;
+		}
+		//cout << "localmax for process " << my_rank << " is " << local_max_score << " and max is " << max_score << endl;*/
+
+		
+		MPI_Reduce(&local_max_score, &max_score, 1, MPI_INT, MPI_MAX, 0, comm);
+		
+		MPI_Allgatherv(my_part, sendcount[my_rank], MPI_INT, res_buffer, sendcount, displs, MPI_INT, comm);
+		
+		for (int i = 0; i < upperbound - lowerbound; i++) {
+			score[cur_lv - lowerbound - i][lowerbound + i] = res_buffer[i];
+		}
+		
+		
+
+		delete[] my_part;
+		my_part = nullptr;
+		delete[] res_buffer;
+		res_buffer = nullptr;
+		
+		
 
 	}
+	delete[] sendcount;
+	sendcount = nullptr;
+	delete[] displs;
+	displs = nullptr;
 	for (int i = 0; i <= a_len; i++) {
 		delete[] score[i];
 	}
 	delete[] score;
 
-	return max_score;
+	if (my_rank == 0) {
+		return max_score;
+	}
+	else {
+		return 0;
+	}
+	
 }
