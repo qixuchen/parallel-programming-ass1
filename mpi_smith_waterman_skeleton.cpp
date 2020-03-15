@@ -22,31 +22,20 @@ int compute_score(int **score, int i, int j, char *a, char *b) {
 int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_len, int b_len) {
 	int max_score = 0;
 	int local_max_score = 0;
-	char *a_str;
-	char *b_str;
+
+	MPI_Bcast(&a_len, 1, MPI_INT, 0, comm);
+	MPI_Bcast(&b_len, 1, MPI_INT, 0, comm);
+	MPI_Bcast(&p, 1, MPI_INT, 0, comm);
 
 	if (my_rank != 0) {
 
-		MPI_Recv(&a_len, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
-		MPI_Recv(&b_len, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
-		MPI_Recv(&p, 1, MPI_INT, 0, 0, comm, MPI_STATUS_IGNORE);
-		a_str = new char[a_len + 1];
-		b_str = new char[b_len + 1];
-		MPI_Recv(a_str, a_len + 1, MPI_CHAR, 0, 0, comm, MPI_STATUS_IGNORE);
-		MPI_Recv(b_str, b_len + 1, MPI_CHAR, 0, 0, comm, MPI_STATUS_IGNORE);
+		a = new char[a_len + 1];
+		b = new char[b_len + 1];
 	}
-	else {
-		for (int i = 1; i < p; i++) {
-			MPI_Send(&a_len, 1, MPI_INT, i, 0, comm);
-			MPI_Send(&b_len, 1, MPI_INT, i, 0, comm);
-			MPI_Send(&p, 1, MPI_INT, i, 0, comm);
-			MPI_Send(a, a_len + 1, MPI_CHAR, i, 0, comm);
-			MPI_Send(b, b_len + 1, MPI_CHAR, i, 0, comm);
-		}
-		a_str = a;
-		b_str = b;
-		
-	}
+	MPI_Barrier(comm);
+	MPI_Bcast(a, a_len + 1, MPI_CHAR, 0, comm);
+	MPI_Bcast(b, b_len + 1, MPI_CHAR, 0, comm);
+
 	int total_lv = a_len + b_len;
 	int **score = new int*[a_len + 1];
 	for (int i = 0; i <= a_len; i++) {
@@ -83,7 +72,7 @@ int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_le
 		int *my_part = new int[my_upperbound - my_lowerbound];
 		for (int i = my_lowerbound; i < my_upperbound; i++) {
 			
-			score[cur_lv - i][i] = compute_score(score, cur_lv - i, i, a_str, b_str);
+			score[cur_lv - i][i] = compute_score(score, cur_lv - i, i, a, b);
 			my_part[i - my_lowerbound] = score[cur_lv - i][i];
 			local_max_score = max(local_max_score, score[cur_lv - i][i]);
 			//cout << "computing for [" << cur_lv - i << "][" << i << "] and score is "<< score[cur_lv - i][i] <<" local max is " << local_max_score<<endl;
@@ -91,14 +80,13 @@ int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_le
 		//cout << "localmax for process " << my_rank << " is " << local_max_score << " and max is " << max_score << endl;*/
 
 		
-		MPI_Reduce(&local_max_score, &max_score, 1, MPI_INT, MPI_MAX, 0, comm);
 		
+		MPI_Barrier(comm);
 		MPI_Allgatherv(my_part, sendcount[my_rank], MPI_INT, res_buffer, sendcount, displs, MPI_INT, comm);
 		
 		for (int i = 0; i < upperbound - lowerbound; i++) {
 			score[cur_lv - lowerbound - i][lowerbound + i] = res_buffer[i];
 		}
-		
 		
 
 		delete[] my_part;
@@ -109,6 +97,8 @@ int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_le
 		
 
 	}
+
+	MPI_Reduce(&local_max_score, &max_score, 1, MPI_INT, MPI_MAX, 0, comm);
 	delete[] sendcount;
 	sendcount = nullptr;
 	delete[] displs;
