@@ -1,7 +1,7 @@
 /**
- * Name:
- * Student id:
- * ITSC email:
+ * Name: CHEN Qixu
+ * Student id: 20412015
+ * ITSC email: qchenax@connect.ust.hk
 */
 #include <iostream>
 #include "mpi_smith_waterman.h"
@@ -44,65 +44,59 @@ int smith_waterman(int my_rank, int p, MPI_Comm comm, char *a, char *b, int a_le
 			score[i][j] = 0;
 		}
 	}
-
-	
-	int *sendcount = new int[p];
-	int *displs = new int[p];
-
+	int p_lowerbound = round(my_rank*1.0*(b_len + 1)*1.0 / p);
+	int p_upperbound = round((my_rank + 1)*1.0*(b_len + 1)*1.0 / p);
 	
 	for (int cur_lv = 2; cur_lv <= a_len + b_len; cur_lv++) {
 		
 
 		int lowerbound = max(1, cur_lv - a_len);
 		int upperbound = min(cur_lv - 1, b_len) + 1;
-		
-		int *res_buffer = new int[upperbound - lowerbound];
-		
+				
 		//cout << "lowerbound for process 0 is " << m_lowerbound << " and upperbound is " << m_upperbound << endl;
-		for (int i = 0; i < p; i++) {
-			int p_lowerbound = lowerbound + round(i*1.0*(upperbound - lowerbound)*1.0 / p);
-			int p_upperbound = lowerbound + round((i + 1)*1.0*(upperbound - lowerbound)*1.0 / p);
-			sendcount[i] = p_upperbound - p_lowerbound;
-			displs[i] = p_lowerbound - lowerbound;
-			//cout << "lowerbound for process " << i << " is " << p_lowerbound << " and upperbound is " << p_upperbound << endl;
-		}
 		
-		int my_lowerbound = lowerbound + round(my_rank*1.0*(upperbound - lowerbound)*1.0 / p);
-		int my_upperbound = lowerbound + round((my_rank + 1)*1.0*(upperbound - lowerbound)*1.0 / p);
-		int *my_part = new int[my_upperbound - my_lowerbound];
+
+
+		int send = 0;
+		int recv = 0;
+		//need to fetch score[curlv-my_lowerbound][my_lowerbound-1] from previous process
+		// correspond to score[curlv-my_upperbound][my_upperbound-1] in the prev process
+		if (p_upperbound >= lowerbound && p_lowerbound < upperbound) {
+			if (my_rank % 2) {
+				if (p_lowerbound >= lowerbound) {
+					MPI_Recv(&recv, 1, MPI_INT, my_rank - 1, 0, comm, MPI_STATUS_IGNORE);
+					score[cur_lv - p_lowerbound][p_lowerbound - 1] = recv;
+				}
+				if (p_upperbound < upperbound) {
+					send = score[cur_lv - p_upperbound][p_upperbound - 1];
+					MPI_Send(&send, 1, MPI_INT, my_rank + 1, 0, comm);
+				}
+			}
+			else {
+				if (p_upperbound < upperbound) {
+					send = score[cur_lv - p_upperbound][p_upperbound - 1];
+					MPI_Send(&send, 1, MPI_INT, my_rank + 1, 0, comm);
+				}
+				if (p_lowerbound >= lowerbound) {
+					MPI_Recv(&recv, 1, MPI_INT, my_rank - 1, 0, comm, MPI_STATUS_IGNORE);
+					score[cur_lv - p_lowerbound][p_lowerbound - 1] = recv;
+				}
+			}
+		}
+
+
+		int my_lowerbound = max(lowerbound, p_lowerbound);
+		int my_upperbound = min(upperbound, p_upperbound);
 		for (int i = my_lowerbound; i < my_upperbound; i++) {
-			
+
 			score[cur_lv - i][i] = compute_score(score, cur_lv - i, i, a, b);
-			my_part[i - my_lowerbound] = score[cur_lv - i][i];
 			local_max_score = max(local_max_score, score[cur_lv - i][i]);
 			//cout << "computing for [" << cur_lv - i << "][" << i << "] and score is "<< score[cur_lv - i][i] <<" local max is " << local_max_score<<endl;
 		}
-		//cout << "localmax for process " << my_rank << " is " << local_max_score << " and max is " << max_score << endl;*/
-
 		
-		
-		MPI_Barrier(comm);
-		MPI_Allgatherv(my_part, sendcount[my_rank], MPI_INT, res_buffer, sendcount, displs, MPI_INT, comm);
-		
-		for (int i = 0; i < upperbound - lowerbound; i++) {
-			score[cur_lv - lowerbound - i][lowerbound + i] = res_buffer[i];
-		}
-		
-
-		delete[] my_part;
-		my_part = nullptr;
-		delete[] res_buffer;
-		res_buffer = nullptr;
-		
-		
-
 	}
 
 	MPI_Reduce(&local_max_score, &max_score, 1, MPI_INT, MPI_MAX, 0, comm);
-	delete[] sendcount;
-	sendcount = nullptr;
-	delete[] displs;
-	displs = nullptr;
 	for (int i = 0; i <= a_len; i++) {
 		delete[] score[i];
 	}
